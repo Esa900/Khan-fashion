@@ -4,7 +4,7 @@ import { useStore } from '../../context/StoreContext';
 import { StoreSettings } from '../../types';
 
 export const StoreControlTab: React.FC = () => {
-  const { settings, updateSettings } = useStore();
+  const { settings, updateSettings, isFirestoreConnected } = useStore();
 
   const [formData, setFormData] = useState<StoreSettings>({ ...settings });
   const [saveToast, setSaveToast] = useState(false);
@@ -25,10 +25,20 @@ export const StoreControlTab: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-200 pb-4">
         <div>
-          <h2 className="text-xl font-bold text-stone-900 flex items-center gap-2">
+          <h2 className="text-xl font-bold text-stone-900 flex flex-wrap items-center gap-2">
             <span>স্টোর কন্ট্রোল ও সেটিংস (Store Control)</span>
             <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold ${formData.isStoreOpen ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-rose-100 text-rose-900 border border-rose-300'}`}>
               {formData.isStoreOpen ? '● স্টোর সক্রিয় (Open)' : '● স্টোর সাময়িক বন্ধ'}
+            </span>
+            <span
+              className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full inline-flex items-center gap-1.5 ${
+                isFirestoreConnected
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  : 'bg-stone-100 text-stone-600 border border-stone-200'
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${isFirestoreConnected ? 'bg-emerald-500 animate-pulse' : 'bg-stone-400'}`} />
+              {isFirestoreConnected ? 'Firebase ক্লাউড সিঙ্ক' : 'কানেক্টিং...'}
             </span>
           </h2>
           <p className="text-xs text-stone-500 mt-0.5">

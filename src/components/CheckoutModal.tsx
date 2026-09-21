@@ -77,7 +77,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
     setIsSubmitting(true);
 
-    setTimeout(() => {
+    setTimeout(async () => {
       const orderItems: OrderItem[] = itemsToOrder.map((item) => ({
         productId: item.product.id,
         productName: item.product.name,
@@ -88,7 +88,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         quantity: item.quantity,
       }));
 
-      const newOrder = placeOrder({
+      const newOrder = await placeOrder({
         customerName: customerName.trim(),
         phone: phone.trim(),
         address: address.trim(),

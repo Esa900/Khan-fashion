@@ -1,0 +1,102 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "Khan Fashion clothing product item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "maxLength": 100 },
+        "productType": { "type": "string", "maxLength": 100 },
+        "regularPrice": { "type": "number" },
+        "salePrice": { "type": "number" },
+        "stock": { "type": "number" },
+        "sizes": { "type": "array" },
+        "colors": { "type": "array" },
+        "fabric": { "type": "string", "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "imageUrl": { "type": "string", "maxLength": 1000000 },
+        "galleryImages": { "type": "array" },
+        "isFeatured": { "type": "boolean" },
+        "salesCount": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "category", "regularPrice", "salePrice", "stock", "imageUrl"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer purchase order in Khan Fashion",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "customerName": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "address": { "type": "string", "maxLength": 500 },
+        "district": { "type": "string", "maxLength": 100 },
+        "items": { "type": "array" },
+        "subtotal": { "type": "number" },
+        "deliveryCharge": { "type": "number" },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "confirmed", "processing", "shipped", "delivered", "cancelled"] },
+        "paymentMethod": { "type": "string", "enum": ["cod", "bkash"] },
+        "bKashTxId": { "type": "string", "maxLength": 100 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["customerName", "phone", "address", "items", "total", "status"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Product category definition",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 100 },
+        "slug": { "type": "string", "maxLength": 100 },
+        "icon": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["name", "slug"]
+    },
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "Store contact and operation settings",
+      "type": "object",
+      "properties": {
+        "storeName": { "type": "string", "maxLength": 100 },
+        "tagline": { "type": "string", "maxLength": 200 },
+        "contactPhone": { "type": "string", "maxLength": 30 },
+        "whatsappNumber": { "type": "string", "maxLength": 30 },
+        "deliveryChargeDhaka": { "type": "number" },
+        "deliveryChargeOutside": { "type": "number" },
+        "bKashNumber": { "type": "string", "maxLength": 30 },
+        "nagadNumber": { "type": "string", "maxLength": 30 },
+        "currencySymbol": { "type": "string", "maxLength": 10 },
+        "isStoreOpen": { "type": "boolean" },
+        "isNoticeActive": { "type": "boolean" },
+        "noticeBannerText": { "type": "string", "maxLength": 500 },
+        "announcementText": { "type": "string", "maxLength": 500 },
+        "updatedAt": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Store inventory products catalog"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Store orders placed by customers"
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Product categories"
+    },
+    "/settings/{settingId}": {
+      "schema": "StoreSettings",
+      "description": "Global store settings and contacts"
+    }
+  }
+}

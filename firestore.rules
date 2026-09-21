@@ -1,0 +1,74 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['name', 'category', 'regularPrice', 'salePrice', 'stock', 'imageUrl']) &&
+        data.name is string && data.name.size() <= 200 &&
+        data.category is string && data.category.size() <= 100 &&
+        data.regularPrice is number && data.regularPrice >= 0 &&
+        data.salePrice is number && data.salePrice >= 0 &&
+        data.stock is number && data.stock >= 0 &&
+        data.imageUrl is string && data.imageUrl.size() <= 1000000;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['customerName', 'phone', 'address', 'items', 'total', 'status']) &&
+        data.customerName is string && data.customerName.size() <= 100 &&
+        data.phone is string && data.phone.size() <= 30 &&
+        data.address is string && data.address.size() <= 500 &&
+        data.items is list && data.items.size() <= 100 &&
+        data.total is number && data.total >= 0 &&
+        data.status in ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'];
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['name', 'slug']) &&
+        data.name is string && data.name.size() <= 100 &&
+        data.slug is string && data.slug.size() <= 100;
+    }
+
+    function isValidSettings(data) {
+      return data.storeName is string && data.storeName.size() <= 100;
+    }
+
+    // Products catalog: readable by all shoppers, writable for store management
+    match /products/{productId} {
+      allow read: if true;
+      allow create: if isValidId(productId) && isValidProduct(request.resource.data);
+      allow update: if isValidId(productId);
+      allow delete: if isValidId(productId);
+    }
+
+    // Categories: readable by all shoppers, writable for store management
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow create: if isValidId(categoryId) && isValidCategory(request.resource.data);
+      allow update: if isValidId(categoryId);
+      allow delete: if isValidId(categoryId);
+    }
+
+    // Orders: shoppers can submit orders, anyone or store admin can view and manage
+    match /orders/{orderId} {
+      allow read: if true;
+      allow create: if isValidId(orderId) && isValidOrder(request.resource.data);
+      allow update: if isValidId(orderId);
+      allow delete: if isValidId(orderId);
+    }
+
+    // Store settings
+    match /settings/{settingId} {
+      allow read: if true;
+      allow create, update: if isValidId(settingId) && isValidSettings(request.resource.data);
+      allow delete: if false;
+    }
+  }
+}

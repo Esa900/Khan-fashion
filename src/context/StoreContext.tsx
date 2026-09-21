@@ -1,6 +1,17 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import {
+  collection,
+  doc,
+  setDoc,
+  deleteDoc,
+  updateDoc,
+  onSnapshot,
+  getDocs,
+  writeBatch,
+} from 'firebase/firestore';
 import { Product, Category, Order, CartItem, StoreSettings, OrderStatus } from '../types';
 import { INITIAL_CATEGORIES, INITIAL_PRODUCTS, INITIAL_ORDERS, INITIAL_SETTINGS } from '../data/initialData';
+import { db, handleFirestoreError, OperationType, testFirestoreConnection } from '../lib/firebase';
 
 interface StoreContextType {
   products: Product[];
@@ -9,22 +20,23 @@ interface StoreContextType {
   settings: StoreSettings;
   cart: CartItem[];
   isAdminAuthenticated: boolean;
+  isFirestoreConnected: boolean;
   loginAdmin: (password: string) => boolean;
   logoutAdmin: () => void;
   // Product actions
-  addProduct: (product: Omit<Product, 'id' | 'createdAt'>) => void;
-  updateProduct: (id: string, product: Partial<Product>) => void;
-  deleteProduct: (id: string) => void;
+  addProduct: (product: Omit<Product, 'id' | 'createdAt'>) => Promise<void>;
+  updateProduct: (id: string, product: Partial<Product>) => Promise<void>;
+  deleteProduct: (id: string) => Promise<void>;
   // Category actions
-  addCategory: (category: Omit<Category, 'id'>) => void;
-  deleteCategory: (id: string) => void;
+  addCategory: (category: Omit<Category, 'id'>) => Promise<void>;
+  deleteCategory: (id: string) => Promise<void>;
   // Order actions
-  placeOrder: (orderData: Omit<Order, 'id' | 'createdAt'>) => Order;
-  updateOrderStatus: (orderId: string, status: OrderStatus) => void;
-  deleteOrder: (orderId: string) => void;
+  placeOrder: (orderData: Omit<Order, 'id' | 'createdAt'>) => Promise<Order>;
+  updateOrderStatus: (orderId: string, status: OrderStatus) => Promise<void>;
+  deleteOrder: (orderId: string) => Promise<void>;
   // Store Settings actions
-  updateSettings: (newSettings: Partial<StoreSettings>) => void;
-  resetAllData: () => void;
+  updateSettings: (newSettings: Partial<StoreSettings>) => Promise<void>;
+  resetAllData: () => Promise<void>;
   // Cart actions
   addToCart: (product: Product, selectedSize: string, selectedColor: string, quantity?: number) => void;
   removeFromCart: (productId: string, size: string, color: string) => void;
@@ -40,24 +52,11 @@ const ADMIN_PASSWORD_KEY = 'ESA006##';
 const STORAGE_PREFIX = 'khan_fashion_';
 
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Load initial states from localStorage with fallbacks
+  // Local cache initialization for instant rendering before Firestore stream arrives
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_PREFIX}products`);
     if (saved) {
-      try {
-        const parsed: Product[] = JSON.parse(saved);
-        // Automatically merge new initial products (like Daraz trending T-shirts)
-        const existingIds = new Set(parsed.map((p) => p.id));
-        const missing = INITIAL_PRODUCTS.filter((p) => !existingIds.has(p.id));
-        if (missing.length > 0) {
-          const merged = [...parsed, ...missing];
-          localStorage.setItem(`${STORAGE_PREFIX}products`, JSON.stringify(merged));
-          return merged;
-        }
-        return parsed;
-      } catch (e) {
-        console.error(e);
-      }
+      try { return JSON.parse(saved); } catch (e) { console.error(e); }
     }
     return INITIAL_PRODUCTS;
   });
@@ -98,23 +97,156 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return sessionStorage.getItem(`${STORAGE_PREFIX}admin_auth`) === 'true';
   });
 
-  // Sync state to localStorage
-  useEffect(() => {
-    localStorage.setItem(`${STORAGE_PREFIX}products`, JSON.stringify(products));
-  }, [products]);
+  const [isFirestoreConnected, setIsFirestoreConnected] = useState<boolean>(false);
 
+  // 1. Initial Connection Validation
   useEffect(() => {
-    localStorage.setItem(`${STORAGE_PREFIX}categories`, JSON.stringify(categories));
-  }, [categories]);
+    testFirestoreConnection().then((connected) => {
+      setIsFirestoreConnected(connected);
+    });
+  }, []);
 
+  // 2. Real-Time Firestore Sync for Products
   useEffect(() => {
-    localStorage.setItem(`${STORAGE_PREFIX}orders`, JSON.stringify(orders));
-  }, [orders]);
+    const productsRef = collection(db, 'products');
 
+    const unsubscribe = onSnapshot(
+      productsRef,
+      async (snapshot) => {
+        setIsFirestoreConnected(true);
+        if (snapshot.empty) {
+          // Seed Firestore with initial catalog if empty
+          try {
+            const batch = writeBatch(db);
+            INITIAL_PRODUCTS.forEach((prod) => {
+              const docRef = doc(db, 'products', prod.id);
+              batch.set(docRef, prod);
+            });
+            await batch.commit();
+          } catch (seedErr) {
+            console.warn('Initial seeding error:', seedErr);
+          }
+        } else {
+          const loadedProducts: Product[] = snapshot.docs.map((docSnap) => {
+            const data = docSnap.data();
+            return {
+              id: docSnap.id,
+              name: data.name || '',
+              category: data.category || 'panjabi',
+              regularPrice: Number(data.regularPrice) || 0,
+              salePrice: Number(data.salePrice) || 0,
+              stock: Number(data.stock) ?? 10,
+              sizes: Array.isArray(data.sizes) ? data.sizes : ['Free Size'],
+              colors: Array.isArray(data.colors) ? data.colors : ['Standard'],
+              description: data.description || '',
+              fabric: data.fabric || '',
+              imageUrl: data.imageUrl || '',
+              galleryImages: Array.isArray(data.galleryImages) ? data.galleryImages : [],
+              productType: data.productType || '',
+              fit: data.fit || '',
+              isFeatured: !!data.isFeatured,
+              salesCount: Number(data.salesCount) || 0,
+              createdAt: data.createdAt || new Date().toISOString(),
+            };
+          });
+
+          // Sort products: newest first
+          loadedProducts.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+          setProducts(loadedProducts);
+          localStorage.setItem(`${STORAGE_PREFIX}products`, JSON.stringify(loadedProducts));
+        }
+      },
+      (error) => {
+        console.warn('Firestore products listener:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // 3. Real-Time Firestore Sync for Categories
   useEffect(() => {
-    localStorage.setItem(`${STORAGE_PREFIX}settings`, JSON.stringify(settings));
-  }, [settings]);
+    const catRef = collection(db, 'categories');
 
+    const unsubscribe = onSnapshot(
+      catRef,
+      async (snapshot) => {
+        if (snapshot.empty) {
+          try {
+            const batch = writeBatch(db);
+            INITIAL_CATEGORIES.forEach((cat) => {
+              const docRef = doc(db, 'categories', cat.id);
+              batch.set(docRef, cat);
+            });
+            await batch.commit();
+          } catch (err) {
+            console.warn('Category seed error:', err);
+          }
+        } else {
+          const loadedCats = snapshot.docs.map((d) => ({ ...d.data(), id: d.id } as Category));
+          setCategories(loadedCats);
+          localStorage.setItem(`${STORAGE_PREFIX}categories`, JSON.stringify(loadedCats));
+        }
+      },
+      (error) => {
+        console.warn('Firestore categories listener:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // 4. Real-Time Firestore Sync for Orders
+  useEffect(() => {
+    const ordersRef = collection(db, 'orders');
+
+    const unsubscribe = onSnapshot(
+      ordersRef,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const loadedOrders = snapshot.docs.map((d) => ({ ...d.data(), id: d.id } as Order));
+          loadedOrders.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          setOrders(loadedOrders);
+          localStorage.setItem(`${STORAGE_PREFIX}orders`, JSON.stringify(loadedOrders));
+        }
+      },
+      (error) => {
+        console.warn('Firestore orders listener:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // 5. Real-Time Firestore Sync for Store Settings
+  useEffect(() => {
+    const settingsDocRef = doc(db, 'settings', 'general');
+
+    const unsubscribe = onSnapshot(
+      settingsDocRef,
+      async (docSnap) => {
+        if (docSnap.exists()) {
+          const loadedSettings = docSnap.data() as StoreSettings;
+          setSettings(loadedSettings);
+          localStorage.setItem(`${STORAGE_PREFIX}settings`, JSON.stringify(loadedSettings));
+        } else {
+          try {
+            await setDoc(settingsDocRef, INITIAL_SETTINGS);
+          } catch (e) {
+            console.warn('Settings seed error:', e);
+          }
+        }
+      },
+      (error) => {
+        console.warn('Firestore settings listener:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // Cart Sync to localStorage
   useEffect(() => {
     localStorage.setItem(`${STORAGE_PREFIX}cart`, JSON.stringify(cart));
   }, [cart]);
@@ -134,42 +266,78 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     sessionStorage.removeItem(`${STORAGE_PREFIX}admin_auth`);
   };
 
-  // Product Actions
-  const addProduct = (productData: Omit<Product, 'id' | 'createdAt'>) => {
+  // Product Actions (Sync to Firestore Cloud Database)
+  const addProduct = async (productData: Omit<Product, 'id' | 'createdAt'>): Promise<void> => {
+    const id = `prod-${Date.now()}`;
     const newProduct: Product = {
       ...productData,
-      id: `prod-${Date.now()}`,
+      id,
       createdAt: new Date().toISOString(),
       salesCount: 0,
     };
-    setProducts(prev => [newProduct, ...prev]);
+
+    // Optimistic local state update
+    setProducts((prev) => [newProduct, ...prev]);
+
+    try {
+      await setDoc(doc(db, 'products', id), newProduct);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `products/${id}`);
+    }
   };
 
-  const updateProduct = (id: string, updatedFields: Partial<Product>) => {
-    setProducts(prev => prev.map(p => (p.id === id ? { ...p, ...updatedFields } : p)));
+  const updateProduct = async (id: string, updatedFields: Partial<Product>): Promise<void> => {
+    // Optimistic local state update
+    setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, ...updatedFields } : p)));
+
+    try {
+      await setDoc(doc(db, 'products', id), updatedFields, { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `products/${id}`);
+    }
   };
 
-  const deleteProduct = (id: string) => {
-    setProducts(prev => prev.filter(p => p.id !== id));
-    // Also clean from cart
-    setCart(prev => prev.filter(item => item.product.id !== id));
+  const deleteProduct = async (id: string): Promise<void> => {
+    // Optimistic local state update
+    setProducts((prev) => prev.filter((p) => p.id !== id));
+    setCart((prev) => prev.filter((item) => item.product.id !== id));
+
+    try {
+      await deleteDoc(doc(db, 'products', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `products/${id}`);
+    }
   };
 
   // Category Actions
-  const addCategory = (categoryData: Omit<Category, 'id'>) => {
+  const addCategory = async (categoryData: Omit<Category, 'id'>): Promise<void> => {
+    const id = `cat-${Date.now()}`;
     const newCategory: Category = {
       ...categoryData,
-      id: `cat-${Date.now()}`,
+      id,
     };
-    setCategories(prev => [...prev, newCategory]);
+
+    setCategories((prev) => [...prev, newCategory]);
+
+    try {
+      await setDoc(doc(db, 'categories', id), newCategory);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `categories/${id}`);
+    }
   };
 
-  const deleteCategory = (id: string) => {
-    setCategories(prev => prev.filter(c => c.id !== id));
+  const deleteCategory = async (id: string): Promise<void> => {
+    setCategories((prev) => prev.filter((c) => c.id !== id));
+
+    try {
+      await deleteDoc(doc(db, 'categories', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `categories/${id}`);
+    }
   };
 
   // Order Actions
-  const placeOrder = (orderData: Omit<Order, 'id' | 'createdAt'>): Order => {
+  const placeOrder = async (orderData: Omit<Order, 'id' | 'createdAt'>): Promise<Order> => {
     const randomNum = Math.floor(1000 + Math.random() * 9000);
     const newOrder: Order = {
       ...orderData,
@@ -177,77 +345,101 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: new Date().toISOString(),
     };
 
-    // Deduct stock and increment salesCount for products
-    setProducts(prevProducts => {
-      return prevProducts.map(prod => {
-        const orderItem = newOrder.items.find(i => i.productId === prod.id);
+    // Optimistically deduct stock
+    setProducts((prevProducts) =>
+      prevProducts.map((prod) => {
+        const orderItem = newOrder.items.find((i) => i.productId === prod.id);
         if (orderItem) {
           const newStock = Math.max(0, prod.stock - orderItem.quantity);
           const newSales = (prod.salesCount || 0) + orderItem.quantity;
           return { ...prod, stock: newStock, salesCount: newSales };
         }
         return prod;
-      });
-    });
+      })
+    );
 
-    setOrders(prev => [newOrder, ...prev]);
+    setOrders((prev) => [newOrder, ...prev]);
+
+    try {
+      // Save order to Firestore
+      await setDoc(doc(db, 'orders', newOrder.id), newOrder);
+
+      // Sync updated stock for ordered items to Firestore
+      for (const item of newOrder.items) {
+        const currentProd = products.find((p) => p.id === item.productId);
+        if (currentProd) {
+          const updatedStock = Math.max(0, currentProd.stock - item.quantity);
+          const updatedSales = (currentProd.salesCount || 0) + item.quantity;
+          await setDoc(
+            doc(db, 'products', item.productId),
+            { stock: updatedStock, salesCount: updatedSales },
+            { merge: true }
+          );
+        }
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `orders/${newOrder.id}`);
+    }
+
     return newOrder;
   };
 
-  const updateOrderStatus = (orderId: string, status: OrderStatus) => {
-    setOrders(prev => prev.map(o => (o.id === orderId ? { ...o, status } : o)));
+  const updateOrderStatus = async (orderId: string, status: OrderStatus): Promise<void> => {
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status } : o)));
+
+    try {
+      await updateDoc(doc(db, 'orders', orderId), { status });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}`);
+    }
   };
 
-  const deleteOrder = (orderId: string) => {
-    setOrders(prev => prev.filter(o => o.id !== orderId));
+  const deleteOrder = async (orderId: string): Promise<void> => {
+    setOrders((prev) => prev.filter((o) => o.id !== orderId));
+
+    try {
+      await deleteDoc(doc(db, 'orders', orderId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `orders/${orderId}`);
+    }
   };
 
   // Settings Actions
-  const updateSettings = (newSettings: Partial<StoreSettings>) => {
-    setSettings(prev => {
-      const updated = { ...prev, ...newSettings };
-      try {
-        localStorage.setItem(`${STORAGE_PREFIX}settings`, JSON.stringify(updated));
-        window.dispatchEvent(new Event('store_settings_updated'));
-      } catch (e) {
-        console.error(e);
-      }
-      return updated;
-    });
+  const updateSettings = async (newSettings: Partial<StoreSettings>): Promise<void> => {
+    const updated = { ...settings, ...newSettings };
+    setSettings(updated);
+    localStorage.setItem(`${STORAGE_PREFIX}settings`, JSON.stringify(updated));
+
+    try {
+      await setDoc(doc(db, 'settings', 'general'), updated, { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'settings/general');
+    }
   };
 
-  useEffect(() => {
-    const handleStorageUpdate = () => {
-      try {
-        const saved = localStorage.getItem(`${STORAGE_PREFIX}settings`);
-        if (saved) {
-          setSettings(JSON.parse(saved));
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    };
-    window.addEventListener('storage', handleStorageUpdate);
-    window.addEventListener('store_settings_updated', handleStorageUpdate);
-    return () => {
-      window.removeEventListener('storage', handleStorageUpdate);
-      window.removeEventListener('store_settings_updated', handleStorageUpdate);
-    };
-  }, []);
-
-  const resetAllData = () => {
+  const resetAllData = async (): Promise<void> => {
     setProducts(INITIAL_PRODUCTS);
     setCategories(INITIAL_CATEGORIES);
     setOrders(INITIAL_ORDERS);
     setSettings(INITIAL_SETTINGS);
     setCart([]);
+
+    try {
+      const batch = writeBatch(db);
+      INITIAL_PRODUCTS.forEach((p) => batch.set(doc(db, 'products', p.id), p));
+      INITIAL_CATEGORIES.forEach((c) => batch.set(doc(db, 'categories', c.id), c));
+      batch.set(doc(db, 'settings', 'general'), INITIAL_SETTINGS);
+      await batch.commit();
+    } catch (e) {
+      console.warn('Reset error:', e);
+    }
   };
 
   // Cart Actions
   const addToCart = (product: Product, selectedSize: string, selectedColor: string, quantity = 1) => {
-    setCart(prev => {
+    setCart((prev) => {
       const existingIndex = prev.findIndex(
-        item =>
+        (item) =>
           item.product.id === product.id &&
           item.selectedSize === selectedSize &&
           item.selectedColor === selectedColor
@@ -264,9 +456,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const removeFromCart = (productId: string, size: string, color: string) => {
-    setCart(prev =>
+    setCart((prev) =>
       prev.filter(
-        item =>
+        (item) =>
           !(item.product.id === productId && item.selectedSize === size && item.selectedColor === color)
       )
     );
@@ -277,8 +469,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       removeFromCart(productId, size, color);
       return;
     }
-    setCart(prev =>
-      prev.map(item => {
+    setCart((prev) =>
+      prev.map((item) => {
         if (
           item.product.id === productId &&
           item.selectedSize === size &&
@@ -307,6 +499,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         settings,
         cart,
         isAdminAuthenticated,
+        isFirestoreConnected,
         loginAdmin,
         logoutAdmin,
         addProduct,
