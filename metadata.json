@@ -1,0 +1,6 @@
+{
+  "name": "Khan Fashion",
+  "description": "Khan Fashion - Exclusive Clothing & Apparel Store with Category Catalog and Secure Admin Management",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
